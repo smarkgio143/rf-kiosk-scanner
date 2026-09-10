@@ -141,6 +141,7 @@
         <div class="row">
           <button id="enrollBtn" disabled>Enroll Current Face</button>
           <button id="clearBtn" class="danger">Clear Enrolled Faces</button>
+          <button id="clearRfBtn" class="danger">Clear RF Assignments</button>
         </div>
         <div id="enrolledCount" class="badge">0 enrolled</div><div class="hint" style="margin-top:8px">Demo faces are saved on this browser/device until cleared.</div>
       </div>
@@ -187,6 +188,7 @@ const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
 const enrollBtn = document.getElementById('enrollBtn');
 const clearBtn = document.getElementById('clearBtn');
+const clearRfBtn = document.getElementById('clearRfBtn');
 const nextBtn = document.getElementById('nextBtn');
 const adminBtn = document.getElementById('adminBtn');
 const adminPanel = document.getElementById('adminPanel');
@@ -200,6 +202,21 @@ let faceTimer = null;
 let qrLoopId = null;
 let descriptors = [];
 let attendanceThisSession = new Set();
+
+// Prevent the same RF from being assigned to more than one employee.
+// Persist assignments locally so refresh/reopen does not immediately forget them.
+let rfAssignments = new Map(
+  Object.entries(JSON.parse(localStorage.getItem('teamops_rf_assignments_v1') || '{}'))
+);
+let employeeRf = new Map();
+for (const [rf, emp] of rfAssignments.entries()) employeeRf.set(emp, rf);
+
+function saveRfAssignments(){
+  localStorage.setItem(
+    'teamops_rf_assignments_v1',
+    JSON.stringify(Object.fromEntries(rfAssignments))
+  );
+}
 let lastUnknownAt = 0;
 let qrErrorCooldownUntil = 0;
 adminBtn.onclick=()=>{adminPanel.style.display=adminPanel.style.display==='none'?'block':'none';};
@@ -370,6 +387,15 @@ clearBtn.onclick = () => {
   setStatus('Enrollment cleared. Enroll at least one employee.','warn');
 };
 
+clearRfBtn.onclick = () => {
+  rfAssignments.clear();
+  employeeRf.clear();
+  saveRfAssignments();
+  addLog('Cleared RF assignments');
+  setStatus('RF assignments cleared for testing.','warn');
+  speak('RF assignments cleared.', true);
+};
+
 function stopAllLoops(){
   if(faceTimer){ clearTimeout(faceTimer); faceTimer=null; }
   if(qrLoopId){ cancelAnimationFrame(qrLoopId); qrLoopId=null; }
@@ -522,6 +548,46 @@ function handleQr(raw){
   const rf='RF-'+m[1];
   const emp=currentEmployee.textContent;
 
+  // Reject an RF that is already assigned.
+  if(rfAssignments.has(rf)){
+    const assignedTo = rfAssignments.get(rf);
+
+    rfPrompt.textContent='RF ALREADY IN USE';
+    rfHint.textContent=rf+' is already assigned to '+assignedTo+'. Scan another RF.';
+    rfStatus.textContent=rf+' cannot be assigned again.';
+    rfStatus.className='status bad';
+    setStatus(rf+' is already in use. Waiting for another RF…','bad');
+    addLog('Blocked duplicate RF: '+rf+' already assigned to '+assignedTo);
+    speak('RF already in use. Please scan another RF.', true);
+
+    // Stay in QR mode for the SAME employee.
+    setTimeout(()=>{
+      if(running && mode==='qr') startQrLoop();
+    }, 1300);
+    return;
+  }
+
+  // Reject a second RF for the same employee.
+  if(employeeRf.has(emp)){
+    const existingRf = employeeRf.get(emp);
+
+    rfPrompt.textContent='EMPLOYEE ALREADY HAS RF';
+    rfHint.textContent=emp+' already has '+existingRf+'.';
+    rfStatus.textContent='Second RF assignment blocked.';
+    rfStatus.className='status bad';
+    setStatus(emp+' already has '+existingRf+'.','bad');
+    addLog('Blocked second RF for '+emp+': already has '+existingRf);
+    speak('Employee already has an RF assigned. Next employee, please.', true);
+
+    setTimeout(()=>startFaceMode(), 2600);
+    return;
+  }
+
+  // Valid assignment: lock the RF immediately.
+  rfAssignments.set(rf, emp);
+  employeeRf.set(emp, rf);
+  saveRfAssignments();
+
   stopAllLoops();
   setMode('success');
   rfPrompt.textContent='RF ASSIGNED';
@@ -533,10 +599,8 @@ function handleQr(raw){
   successText.innerHTML='✓ '+emp+'<small>'+rf+' assigned successfully</small>';
   successOverlay.classList.add('show');
 
-  // Speak success before returning to face mode.
   speak(rf.replace('-', ' ') + ' assigned successfully. Thank you. Next employee, please.', true);
 
-  // Give the voice enough time to be heard before the next prompt can replace it.
   setTimeout(()=>{
     successOverlay.classList.remove('show');
     startFaceMode();
