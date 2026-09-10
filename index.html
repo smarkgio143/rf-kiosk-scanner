@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Attendance + RF Kiosk</title>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+
+  <style>
+    :root{
+      --bg:#07111f;
+      --panel:rgba(15,25,42,.66);
+      --line:rgba(255,255,255,.10);
+      --text:#eef5ff;
+      --muted:#9fb0c6;
+      --ok:#39d98a;
+      --warn:#ffb454;
+      --bad:#ff6b6b;
+      --blue:#62a8ff;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      min-height:100vh;
+      font-family:Inter,Segoe UI,Arial,sans-serif;
+      background:
+        radial-gradient(circle at 20% 0%, rgba(57,217,138,.12), transparent 35%),
+        radial-gradient(circle at 90% 15%, rgba(98,168,255,.10), transparent 30%),
+        var(--bg);
+      color:var(--text);
+      padding:24px;
+    }
+    .wrap{max-width:1200px;margin:auto}
+    h1{margin:0 0 8px;font-size:28px}
+    .sub{color:var(--muted);margin-bottom:20px}
+    .grid{display:grid;grid-template-columns:1.35fr .65fr;gap:18px}
+    .card{
+      background:var(--panel);
+      border:1px solid var(--line);
+      border-radius:18px;
+      padding:18px;
+      backdrop-filter:blur(14px);
+      box-shadow:0 18px 50px rgba(0,0,0,.22);
+    }
+    .video-wrap{position:relative}
+    video{
+      width:100%;
+      border-radius:14px;
+      background:#000;
+      aspect-ratio:16/10;
+      object-fit:cover;
+    }
+    .mode-pill{
+      position:absolute;top:14px;left:14px;
+      padding:8px 12px;border-radius:999px;
+      background:rgba(6,14,25,.82);
+      border:1px solid rgba(255,255,255,.14);
+      font-size:13px;font-weight:800;
+      backdrop-filter:blur(8px);
+    }
+    .status{
+      margin-top:12px;padding:14px 16px;border-radius:12px;
+      background:rgba(255,255,255,.05);
+      border:1px solid var(--line);font-weight:700;
+    }
+    .ok{border-left:5px solid var(--ok)}
+    .warn{border-left:5px solid var(--warn)}
+    .bad{border-left:5px solid var(--bad)}
+    .blue{border-left:5px solid var(--blue)}
+    .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+    button,input{
+      font:inherit;border-radius:10px;border:1px solid var(--line);
+    }
+    button{
+      padding:11px 14px;background:#17263d;color:var(--text);cursor:pointer;
+    }
+    button.primary{background:#184f3b;border-color:#2c8c66}
+    button.danger{background:#3a1d26;border-color:#7a3347}
+    button:disabled{opacity:.45;cursor:not-allowed}
+    input{
+      width:100%;padding:11px 12px;background:#0d1828;color:var(--text);margin-top:8px;
+    }
+    label{display:block;color:var(--muted);font-size:13px;margin-top:12px}
+    .big{font-size:24px;font-weight:800}
+    .muted{color:var(--muted)}
+    .log{max-height:300px;overflow:auto;margin-top:10px}
+    .log-item{padding:10px 0;border-bottom:1px solid var(--line);font-size:14px}
+    .rf-box{
+      margin-top:14px;padding:20px;border-radius:14px;
+      border:1px dashed rgba(255,255,255,.20);
+      text-align:center;background:rgba(255,255,255,.035);
+    }
+    .rf-box strong{display:block;font-size:22px;margin-bottom:6px}
+    .hint{font-size:13px;color:var(--muted)}
+    .enroll-box{margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}
+    .badge{
+      display:inline-block;margin-top:8px;padding:6px 10px;border-radius:999px;
+      background:rgba(255,255,255,.06);font-size:12px;color:var(--muted);
+    }
+    .success-overlay{
+      position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+      background:rgba(3,12,20,.72);border-radius:14px;backdrop-filter:blur(6px);z-index:5;
+      text-align:center;padding:24px;
+    }
+    .success-overlay.show{display:flex}
+    .success-card{font-weight:800;font-size:28px;line-height:1.35}
+    .success-card small{display:block;font-size:15px;color:var(--muted);margin-top:8px;font-weight:600}
+    canvas{display:none}
+    @media(max-width:820px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Attendance + RF Kiosk</h1>
+  <div class="sub">Hands-free attendance and RF assignment kiosk.</div>
+
+  <div class="grid">
+    <section class="card">
+      <div class="video-wrap">
+        <video id="video" autoplay muted playsinline></video>
+        <div id="modePill" class="mode-pill">LOADING</div>
+        <div id="successOverlay" class="success-overlay"><div class="success-card" id="successText">SUCCESS</div></div>
+      </div>
+
+      <canvas id="qrCanvas"></canvas>
+
+      <div id="status" class="status blue">Loading face-recognition models…</div>
+
+      <div class="row">
+        <button id="startBtn" class="primary">Start Kiosk</button>
+        <button id="stopBtn" disabled>Stop</button>
+        <button id="adminBtn">Admin Setup</button>
+      </div>
+
+      <div class="enroll-box" id="adminPanel" style="display:none">
+        <div class="muted">Demo enrollment</div>
+        <label>Employee name</label>
+        <input id="employeeName" placeholder="e.g. Mark Gio Salces" />
+        <div class="row">
+          <button id="enrollBtn" disabled>Enroll Current Face</button>
+          <button id="clearBtn" class="danger">Clear Enrolled Faces</button>
+        </div>
+        <div id="enrolledCount" class="badge">0 enrolled</div><div class="hint" style="margin-top:8px">Demo faces are saved on this browser/device until cleared.</div>
+      </div>
+    </section>
+
+    <aside class="card">
+      <div class="muted">Current employee</div>
+      <div id="currentEmployee" class="big">None</div>
+
+      <div class="rf-box">
+        <strong id="rfPrompt">WAITING FOR FACE</strong>
+        <div id="rfHint" class="hint">Stand in front of the camera.</div>
+      </div>
+
+      <div id="rfStatus" class="status warn">Kiosk not started</div>
+
+      <div class="row">
+        <button id="nextBtn">Reset / Next Employee</button>
+      </div>
+
+      <div class="muted" style="margin-top:18px">Session log</div>
+      <div id="log" class="log"></div>
+    </aside>
+  </div>
+</div>
+
+<script>
+const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+
+const video = document.getElementById('video');
+const canvas = document.getElementById('qrCanvas');
+const ctx = canvas.getContext('2d', {willReadFrequently:true});
+const statusEl = document.getElementById('status');
+const modePill = document.getElementById('modePill');
+const currentEmployee = document.getElementById('currentEmployee');
+const rfPrompt = document.getElementById('rfPrompt');
+const rfHint = document.getElementById('rfHint');
+const rfStatus = document.getElementById('rfStatus');
+const logEl = document.getElementById('log');
+const employeeName = document.getElementById('employeeName');
+const enrolledCount = document.getElementById('enrolledCount');
+
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const enrollBtn = document.getElementById('enrollBtn');
+const clearBtn = document.getElementById('clearBtn');
+const nextBtn = document.getElementById('nextBtn');
+const adminBtn = document.getElementById('adminBtn');
+const adminPanel = document.getElementById('adminPanel');
+const successOverlay = document.getElementById('successOverlay');
+const successText = document.getElementById('successText');
+
+let stream = null;
+let running = false;
+let mode = 'idle'; // idle | face | qr | success
+let faceTimer = null;
+let qrLoopId = null;
+let descriptors = [];
+let attendanceThisSession = new Set();
+let lastUnknownAt = 0;
+let qrErrorCooldownUntil = 0;
+adminBtn.onclick=()=>{adminPanel.style.display=adminPanel.style.display==='none'?'block':'none';};
+
+function setMode(m){
+  mode = m;
+  const names = {
+    idle:'IDLE',
+    face:'FACE MODE',
+    qr:'RF QR MODE',
+    success:'SUCCESS'
+  };
+  modePill.textContent = names[m] || m.toUpperCase();
+}
+function setStatus(text,type='blue'){
+  statusEl.className='status '+type;
+  statusEl.textContent=text;
+}
+function addLog(text){
+  const d=document.createElement('div');
+  d.className='log-item';
+  d.textContent=new Date().toLocaleTimeString()+' — '+text;
+  logEl.prepend(d);
+}
+function updateCount(){
+  enrolledCount.textContent = descriptors.length + ' enrolled';
+}
+function saveEnrollments(){
+  const payload=descriptors.map(d=>({label:d.label,descriptors:d.descriptors.map(x=>Array.from(x))}));
+  localStorage.setItem('teamops_face_enrollments_v1',JSON.stringify(payload));
+}
+function loadEnrollments(){
+  try{
+    const raw=JSON.parse(localStorage.getItem('teamops_face_enrollments_v1')||'[]');
+    descriptors=raw.map(x=>new faceapi.LabeledFaceDescriptors(x.label,x.descriptors.map(a=>new Float32Array(a))));
+    updateCount();
+  }catch(e){console.warn('Could not restore enrollments',e);}
+}
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+let lastSpoken = '';
+let lastSpokenAt = 0;
+
+function speak(text, force=false){
+  if(!('speechSynthesis' in window)) return;
+
+  const now = Date.now();
+  if(!force && text === lastSpoken && (now - lastSpokenAt) < 2500) return;
+
+  lastSpoken = text;
+  lastSpokenAt = now;
+
+  window.speechSynthesis.cancel();
+
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.rate = 1.05;
+  utter.pitch = 1.0;
+  utter.volume = 1.0;
+
+  const voices = speechSynthesis.getVoices();
+  const preferred =
+    voices.find(v => /en-PH/i.test(v.lang)) ||
+    voices.find(v => /en-US/i.test(v.lang)) ||
+    voices.find(v => /^en/i.test(v.lang));
+
+  if(preferred) utter.voice = preferred;
+  window.speechSynthesis.speak(utter);
+}
+
+
+async function loadModels(){
+  try{
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+    ]);
+    setStatus('Models ready. Start the kiosk.', 'ok');
+    setMode('idle');
+    startBtn.disabled=false;
+    // Try to auto-start kiosk. Browser may still require camera permission on first use.
+    setTimeout(()=>{ if(!running) startBtn.click(); },300);
+  }catch(e){
+    console.error(e);
+    setStatus('Could not load models. Check internet connection.', 'bad');
+  }
+}
+
+async function startCamera(){
+  if(stream) return;
+  stream = await navigator.mediaDevices.getUserMedia({
+    video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},
+    audio:false
+  });
+  video.srcObject=stream;
+  await video.play();
+}
+
+startBtn.onclick = async () => {
+  try{
+    await startCamera();
+    running=true;
+    startBtn.disabled=true;
+    stopBtn.disabled=false;
+    enrollBtn.disabled=false;
+    startFaceMode();
+  }catch(e){
+    console.error(e);
+    setStatus('Camera failed. Use localhost/HTTPS and allow camera.', 'bad');
+  }
+};
+
+stopBtn.onclick = () => {
+  running=false;
+  stopAllLoops();
+  if(stream){
+    stream.getTracks().forEach(t=>t.stop());
+    stream=null;
+  }
+  startBtn.disabled=false;
+  stopBtn.disabled=true;
+  enrollBtn.disabled=true;
+  setMode('idle');
+  setStatus('Kiosk stopped.', 'warn');
+  rfStatus.textContent='Kiosk stopped';
+  rfStatus.className='status warn';
+};
+
+async function getDescriptor(){
+  return await faceapi
+    .detectSingleFace(video,new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:.5}))
+    .withFaceLandmarks()
+    .withFaceDescriptor();
+}
+
+enrollBtn.onclick = async () => {
+  const name=employeeName.value.trim();
+  if(!name){
+    setStatus('Enter employee name first.', 'warn');
+    return;
+  }
+  setStatus('Capturing face for '+name+'…','blue');
+  const result=await getDescriptor();
+  if(!result){
+    setStatus('No clear face detected. Try again.', 'bad');
+    return;
+  }
+
+  const existingIndex=descriptors.findIndex(x=>x.label.toLowerCase()===name.toLowerCase());
+  const entry=new faceapi.LabeledFaceDescriptors(name,[result.descriptor]);
+
+  if(existingIndex>=0) descriptors[existingIndex]=entry;
+  else descriptors.push(entry);
+
+  updateCount();
+  saveEnrollments();
+  addLog('Enrolled '+name);
+  setStatus(name+' enrolled. Automatic recognition is active.','ok');
+  employeeName.value='';
+};
+
+clearBtn.onclick = () => {
+  descriptors=[];
+  saveEnrollments();
+  attendanceThisSession.clear();
+  updateCount();
+  addLog('Cleared enrolled faces');
+  setStatus('Enrollment cleared. Enroll at least one employee.','warn');
+};
+
+function stopAllLoops(){
+  if(faceTimer){ clearTimeout(faceTimer); faceTimer=null; }
+  if(qrLoopId){ cancelAnimationFrame(qrLoopId); qrLoopId=null; }
+}
+
+function startFaceMode(){
+  stopAllLoops();
+  if(!running) return;
+
+  setMode('face');
+  currentEmployee.textContent='None';
+  rfPrompt.textContent='WAITING FOR FACE';
+  rfHint.textContent='Stand in front of the camera.';
+  rfStatus.textContent='Automatic face recognition active';
+  rfStatus.className='status warn';
+  setStatus('Waiting for employee face…','blue');
+  speak('Please face the camera.');
+
+  faceScanLoop();
+}
+
+async function faceScanLoop(){
+  if(!running || mode!=='face') return;
+
+  try{
+    if(descriptors.length===0){
+      setStatus('No employee enrolled yet. Enroll a face below.','warn');
+      faceTimer=setTimeout(faceScanLoop,1000);
+      return;
+    }
+
+    const result=await getDescriptor();
+
+    if(result){
+      const matcher=new faceapi.FaceMatcher(descriptors,0.55);
+      const match=matcher.findBestMatch(result.descriptor);
+
+      if(match.label!=='unknown'){
+        await onEmployeeRecognized(match.label);
+        return;
+      } else {
+        const now=Date.now();
+        if(now-lastUnknownAt>3000){
+          setStatus('Face detected but not recognized.','warn');
+          speak('Face not recognized. Please try again.');
+          lastUnknownAt=now;
+        }
+      }
+    }
+  }catch(e){
+    console.error(e);
+  }
+
+  faceTimer=setTimeout(faceScanLoop,700);
+}
+
+async function onEmployeeRecognized(name){
+  stopAllLoops();
+  currentEmployee.textContent=name;
+
+  // If this employee already has attendance, DO NOT continue to RF scanning.
+  // Return to face mode and wait for a different employee.
+  if(attendanceThisSession.has(name)){
+    addLog('Recognized again: '+name+' — duplicate attendance prevented');
+    setStatus(name+' already has attendance. Waiting for next employee.','warn');
+
+    rfPrompt.textContent='DUPLICATE FACE';
+    rfHint.textContent='Attendance already logged. Next employee, please.';
+    rfStatus.textContent='No RF scan required for duplicate attendance.';
+    rfStatus.className='status warn';
+    speak('Attendance already logged. Next employee, please.', true);
+
+    setMode('face');
+
+    // Give the employee time to move away before face scanning resumes.
+    await sleep(1800);
+    if(running) startFaceMode();
+    return;
+  }
+
+  // First valid attendance scan: continue to RF QR.
+  attendanceThisSession.add(name);
+  addLog('Attendance: '+name);
+  setStatus('Attendance logged for '+name+' (demo).','ok');
+
+  rfPrompt.textContent='SCAN RF QR NOW';
+  rfHint.textContent='Show the RF QR to the same camera.';
+  rfStatus.textContent='Waiting for RF QR…';
+  rfStatus.className='status warn';
+  speak('Attendance confirmed. Please scan your RF.', true);
+
+  setMode('qr');
+  await sleep(500);
+  startQrLoop();
+}
+
+function startQrLoop(){
+  if(!running || mode!=='qr') return;
+
+  const scan=()=>{
+    if(!running || mode!=='qr') return;
+
+    if(video.readyState>=2 && video.videoWidth && video.videoHeight){
+      canvas.width=video.videoWidth;
+      canvas.height=video.videoHeight;
+      ctx.drawImage(video,0,0,canvas.width,canvas.height);
+
+      const imageData=ctx.getImageData(0,0,canvas.width,canvas.height);
+      const code=jsQR(imageData.data,imageData.width,imageData.height,{
+        inversionAttempts:'attemptBoth'
+      });
+
+      if(code && code.data){
+        handleQr(code.data.trim());
+        return;
+      }
+    }
+    qrLoopId=requestAnimationFrame(scan);
+  };
+
+  qrLoopId=requestAnimationFrame(scan);
+}
+
+function handleQr(raw){
+  if(mode!=='qr') return;
+
+  const m=raw.match(/^TEAMOPS-RF-(\d{2})$/i);
+
+  if(!m){
+    const now = Date.now();
+
+    rfStatus.textContent='Invalid QR. Use a TeamOps RF QR.';
+    rfStatus.className='status bad';
+
+    // Avoid firing the same error every camera frame, which can cancel the voice
+    // before it has time to speak.
+    if(now >= qrErrorCooldownUntil){
+      addLog('Rejected QR: '+raw);
+      speak('Invalid RF. Please scan again.', true);
+      qrErrorCooldownUntil = now + 2200;
+    }
+
+    // Keep QR mode active and resume scanning shortly.
+    setTimeout(()=>{
+      if(running && mode==='qr') startQrLoop();
+    }, 900);
+    return;
+  }
+
+  const rf='RF-'+m[1];
+  const emp=currentEmployee.textContent;
+
+  stopAllLoops();
+  setMode('success');
+  rfPrompt.textContent='RF ASSIGNED';
+  rfHint.textContent=rf+' is linked to '+emp+'.';
+  rfStatus.textContent=rf+' assigned to '+emp;
+  rfStatus.className='status ok';
+  addLog(rf+' assigned to '+emp);
+  setStatus('Complete. Preparing for next employee…','ok');
+  successText.innerHTML='✓ '+emp+'<small>'+rf+' assigned successfully</small>';
+  successOverlay.classList.add('show');
+
+  // Speak success before returning to face mode.
+  speak(rf.replace('-', ' ') + ' assigned successfully. Thank you. Next employee, please.', true);
+
+  // Give the voice enough time to be heard before the next prompt can replace it.
+  setTimeout(()=>{
+    successOverlay.classList.remove('show');
+    startFaceMode();
+  }, 3800);
+}
+
+nextBtn.onclick=()=>startFaceMode();
+
+window.addEventListener('load',()=>{loadEnrollments();loadModels();});
+</script>
+</body>
+</html>
